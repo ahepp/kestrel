@@ -82,6 +82,7 @@ def _make_scheduler(
     scheduler.waiting.push(request)
     scheduler.running = RunningQueue()
     scheduler._completed = deque()
+    scheduler._preempted_request_ids = set()
     scheduler._select_prefill_batch = lambda capacity_remaining: [_make_candidate(request)]
     return scheduler
 
