@@ -1590,6 +1590,11 @@ class GenerationScheduler:
             ).result()
             request.lifecycle.crops_ready = True
 
+    def _request_max_length(self, request: GenerationRequest) -> int:
+        if self.runtime.supports_context_clamped_generation:
+            return min(request.target_length, self.runtime.max_seq_length)
+        return request.target_length
+
     def _prefill_reserve_length(
         self,
         request: GenerationRequest,
