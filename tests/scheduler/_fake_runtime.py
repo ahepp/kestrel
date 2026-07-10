@@ -149,8 +149,6 @@ class FakeRuntime:
         # Model-specific surfaces — left as ``None``/empty for fake purposes;
         # tests that need richer values assign attributes directly.
         self.config: Any = None
-        self.region: Any = None
-        self.spatial_tables: Any = None
         self.page_table = _FakePageTable(page_size=page_size)
 
         # Engine + scheduler infrastructure

@@ -18,10 +18,10 @@ kernel:
 
 Some attributes are typed as ``Any`` because they expose model-specific
 state the engine + scheduler currently reach into directly (config,
-region, spatial decoding tables, prefix cache, slot containers).
-Tightening those — or refactoring callers to stop reaching into them —
-is a follow-up; declaring them here keeps the protocol an honest
-record of the surface a runtime must satisfy today.
+prefix cache, slot containers).  Tightening those — or refactoring
+callers to stop reaching into them — is a follow-up; declaring them here
+keeps the protocol an honest record of the surface a runtime must satisfy
+today.
 """
 
 from __future__ import annotations
@@ -119,8 +119,6 @@ class AutoregressiveRuntime(Runtime, Protocol):
     # Model-specific state callers reach into today.
     # Narrowing these is a follow-up.
     config: Any
-    region: Any
-    spatial_tables: Any
     page_table: Any
 
     # Capacity queries
