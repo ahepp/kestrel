@@ -1784,6 +1784,9 @@ class GenerationScheduler:
                     lifecycle.lora_slot_ready = True
                     acquired_lora = True
                 except Exception as exc:
+                    if _is_out_of_lora_slots(exc):
+                        lifecycle.transition(RequestPhase.WAITING_RESOURCES)
+                        continue
                     self.waiting.remove(request)
                     self._fail_request_early(request, exc)
                     progress = True

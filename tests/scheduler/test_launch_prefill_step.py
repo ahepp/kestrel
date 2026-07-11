@@ -148,3 +148,25 @@ def test_launch_prefill_step_dequeues_requests_that_fail_to_bind(
     assert scheduler._completed[0].request_id == request.request_id
     assert request.lifecycle.phase == RequestPhase.COMPLETED
     assert len(runtime.released_prefill_slots) == 1
+
+
+def test_launch_prefill_step_defers_when_lora_slots_exhausted() -> None:
+    request = _make_request()
+    request.adapter = "ft-1"
+    runtime = FakeRuntime()
+    scheduler = _make_scheduler(request, runtime)
+    scheduler._acquire_adapter_slot = lambda adapter_id: (_ for _ in ()).throw(
+        RuntimeError("Out of LoRA slots: all slots are in use.")
+    )
+    pipeline = PipelineState()
+
+    progressed = GenerationScheduler._launch_prefill_step(scheduler, pipeline)
+
+    assert progressed is False
+    assert list(scheduler.waiting) == [request]
+    assert not scheduler._completed
+    assert request.lifecycle.phase == RequestPhase.WAITING_RESOURCES
+    assert request.lifecycle.lora_slot_ready is False
+    assert request.lora_slot == 0
+    assert len(runtime.prepare_calls) == 0
+    assert len(runtime.released_prefill_slots) == 1
