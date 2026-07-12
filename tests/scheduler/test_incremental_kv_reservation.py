@@ -390,6 +390,24 @@ def test_preempt_request_preserves_logprobs() -> None:
     assert runtime.released_sequences == [state]
 
 
+def test_preempt_request_keeps_base_request_lora_ready() -> None:
+    runtime = FakeRuntime()
+    scheduler = _scheduler(runtime)
+    seq = _running_lifecycle(request_id=5, batch_idx=0)
+    seq.lora_slot_ready = True
+    state = seq.state
+    runtime.active_sequences[0] = state
+    scheduler.running.push(seq)
+
+    GenerationScheduler._preempt_request(scheduler, seq)
+
+    assert seq.request.adapter is None
+    assert seq.request.lora_slot == 0
+    assert seq.lora_slot_ready is True
+    assert seq.phase == RequestPhase.READY_FOR_PREFILL
+    assert list(scheduler.waiting) == [seq.request]
+
+
 def test_preempt_request_extends_caller_generated_prefix() -> None:
     runtime = FakeRuntime()
     scheduler = _scheduler(runtime)

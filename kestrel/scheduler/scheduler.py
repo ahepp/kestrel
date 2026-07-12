@@ -2141,7 +2141,7 @@ class GenerationScheduler:
         seq.prefill_completed_at = None
         seq.prefix_cache_hit = False
         seq.request.lora_slot = 0
-        seq.lora_slot_ready = False
+        seq.lora_slot_ready = seq.request.adapter is None
         seq.transition(
             RequestPhase.READY_FOR_PREFILL
             if (not seq.has_image or seq.crops_ready)
