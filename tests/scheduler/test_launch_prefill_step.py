@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import pytest
 
 from kestrel.models.moondream.runtime import PrefillClassification, TextToken
+from kestrel.runtime import PreparedSequence, SequenceState
+from kestrel.runtime.state import _CacheLookupResult
 from kestrel.scheduler.pipeline import PipelineState
 from kestrel.scheduler.queues import RequestQueue, RunningQueue
 from kestrel.scheduler.scheduler import GenerationScheduler, _PrefillCandidate
@@ -74,6 +76,35 @@ def _make_candidate(
         reserve_length=request.target_length,
         pages_needed=1,
         cohort_key=None,
+    )
+
+
+def _make_prepared(
+    *,
+    batch_idx: int,
+    image_length: int,
+    can_reuse: bool,
+) -> PreparedSequence:
+    prompt_length = 2 + image_length
+    return PreparedSequence(
+        state=SequenceState(
+            batch_idx=batch_idx,
+            length=prompt_length,
+            max_length=prompt_length + 8,
+            prompt_length=prompt_length,
+            image_length=image_length,
+        ),
+        tokens_list=[TextToken(1), TextToken(2)],
+        cache_tokens=[],
+        cache_result=_CacheLookupResult(
+            match=None,
+            skip_positions=1 if can_reuse else 0,
+            temp_lock_node=None,
+            can_reuse=can_reuse,
+            namespace=None,
+        ),
+        adapter_id=None,
+        image_hash=None,
     )
 
 
@@ -241,6 +272,55 @@ def test_launch_prefill_step_skips_crop_work_when_image_cache_reused() -> None:
     assert preprocess_calls == []
     assert request.image_crops is None
     assert runtime.prepare_calls[0]["image_crops"] is None
+
+
+def test_launch_prefill_step_defers_rows_whose_bound_prefill_mode_changes() -> None:
+    first = _make_request(request_id=1, max_new_tokens=0)
+    second = _make_request(request_id=2)
+    for request in (first, second):
+        request.lifecycle.has_image = True
+        request.lifecycle.crops_ready = True
+        request.lifecycle.lora_slot_ready = True
+        request.image_hash = b"image-hash"
+
+    prepared_hit = _make_prepared(batch_idx=0, image_length=4, can_reuse=True)
+    prepared_miss = _make_prepared(batch_idx=1, image_length=4, can_reuse=False)
+    prepared_results = iter([prepared_hit, prepared_miss])
+
+    runtime = FakeRuntime(max_batch_size=2, max_batch_slots=3)
+
+    def prepare_sequence(*args, **kwargs) -> PreparedSequence:
+        del args, kwargs
+        return next(prepared_results)
+
+    runtime.prepare_sequence = prepare_sequence  # type: ignore[method-assign]
+    scheduler = object.__new__(GenerationScheduler)
+    scheduler.runtime = runtime
+    scheduler.waiting = RequestQueue()
+    scheduler.waiting.push(first)
+    scheduler.waiting.push(second)
+    scheduler.running = RunningQueue()
+    scheduler._completed = deque()
+    scheduler._preempted_request_ids = set()
+    scheduler._decode_kv_recovery_request_id = None
+    scheduler._compute_stream = None
+    scheduler._select_prefill_batch = lambda capacity_remaining: [
+        _make_candidate(first, can_reuse=True),
+        _make_candidate(second, can_reuse=True),
+    ]
+    finalized: list[tuple[RequestLifecycle, str]] = []
+    scheduler._finalize_sequence = lambda seq, reason: finalized.append((seq, reason))  # type: ignore[method-assign]
+    pipeline = PipelineState()
+
+    progressed = GenerationScheduler._launch_prefill_step(scheduler, pipeline)
+
+    assert progressed is True
+    assert runtime.launch_calls == [[prepared_hit]]
+    assert runtime.aborted_prepared == [prepared_miss]
+    assert list(scheduler.waiting) == [second]
+    assert second.lifecycle.phase == RequestPhase.READY_FOR_PREFILL
+    assert second.lifecycle.sequence_state is None
+    assert finalized == [(first.lifecycle, "length")]
 
 
 @pytest.mark.parametrize("failure_stage", ["adapter", "prepare"])
