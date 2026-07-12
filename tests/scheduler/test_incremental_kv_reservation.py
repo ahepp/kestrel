@@ -851,7 +851,7 @@ def test_no_progress_fallback_respects_reclaimable_prefill_budget() -> None:
     scheduler = _scheduler(runtime)
     request = _waiting_request(request_id=12)
     scheduler.waiting.push(request)
-    scheduler._select_prefill_batch = lambda capacity_remaining: []
+    scheduler._select_prefill_batch = lambda capacity_remaining, **kwargs: []
 
     progressed = GenerationScheduler.advance(scheduler)
 
@@ -868,7 +868,7 @@ def test_no_progress_fallback_ignores_lora_resource_wait() -> None:
     request.lifecycle.lora_slot_ready = False
     request.lifecycle.transition(RequestPhase.WAITING_RESOURCES)
     scheduler.waiting.push(request)
-    scheduler._select_prefill_batch = lambda capacity_remaining: []
+    scheduler._select_prefill_batch = lambda capacity_remaining, **kwargs: []
 
     progressed = GenerationScheduler.advance(scheduler)
 

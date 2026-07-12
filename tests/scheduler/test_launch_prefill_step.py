@@ -121,7 +121,9 @@ def _make_scheduler(
     scheduler._completed = deque()
     scheduler._preempted_request_ids = set()
     scheduler._decode_kv_recovery_request_id = None
-    scheduler._select_prefill_batch = lambda capacity_remaining: [_make_candidate(request)]
+    scheduler._select_prefill_batch = lambda capacity_remaining, **kwargs: [
+        _make_candidate(request)
+    ]
     return scheduler
 
 
@@ -262,7 +264,7 @@ def test_launch_prefill_step_skips_crop_work_when_image_cache_reused() -> None:
 
     runtime.preprocess_image_async = preprocess  # type: ignore[method-assign]
     scheduler = _make_scheduler(request, runtime)
-    scheduler._select_prefill_batch = lambda capacity_remaining: [
+    scheduler._select_prefill_batch = lambda capacity_remaining, **kwargs: [
         _make_candidate(request, can_reuse=True)
     ]
     scheduler._acquire_adapter_slot = lambda adapter_id: 0
@@ -304,7 +306,7 @@ def test_launch_prefill_step_materializes_crops_when_planned_hit_becomes_miss() 
     runtime.preprocess_image_async = preprocess  # type: ignore[method-assign]
     runtime.launch_prepared_batch = launch_prepared_batch  # type: ignore[method-assign]
     scheduler = _make_scheduler(request, runtime)
-    scheduler._select_prefill_batch = lambda capacity_remaining: [
+    scheduler._select_prefill_batch = lambda capacity_remaining, **kwargs: [
         _make_candidate(request, can_reuse=True)
     ]
     scheduler._acquire_adapter_slot = lambda adapter_id: 0
@@ -352,7 +354,7 @@ def test_launch_prefill_step_defers_rows_whose_bound_prefill_mode_changes() -> N
     scheduler._preempted_request_ids = set()
     scheduler._decode_kv_recovery_request_id = None
     scheduler._compute_stream = None
-    scheduler._select_prefill_batch = lambda capacity_remaining: [
+    scheduler._select_prefill_batch = lambda capacity_remaining, **kwargs: [
         _make_candidate(first, can_reuse=True),
         _make_candidate(second, can_reuse=True),
     ]
@@ -420,3 +422,37 @@ def test_launch_prefill_step_defers_when_lora_slots_exhausted() -> None:
     assert request.lora_slot == 0
     assert len(runtime.prepare_calls) == 0
     assert len(runtime.released_prefill_slots) == 1
+
+
+def test_launch_prefill_step_allows_base_request_past_exhausted_lora() -> None:
+    adapter = _make_request(request_id=1)
+    adapter.adapter = "ft-1"
+    base = _make_request(request_id=2, max_new_tokens=0)
+    base.lifecycle.lora_slot_ready = True
+    prepared = _make_prepared(batch_idx=0, image_length=0, can_reuse=False)
+    runtime = FakeRuntime(max_batch_size=2, max_batch_slots=3, prepare_result=prepared)
+    scheduler = object.__new__(GenerationScheduler)
+    scheduler.runtime = runtime
+    scheduler.waiting = RequestQueue()
+    scheduler.waiting.push(adapter)
+    scheduler.waiting.push(base)
+    scheduler.running = RunningQueue()
+    scheduler._completed = deque()
+    scheduler._preempted_request_ids = set()
+    scheduler._decode_kv_recovery_pending = False
+    scheduler._decode_kv_recovery_request_id = None
+    scheduler._compute_stream = None
+    scheduler._acquire_adapter_slot = lambda adapter_id: (_ for _ in ()).throw(
+        RuntimeError("Out of LoRA slots: all slots are in use.")
+    )
+    finalized: list[tuple[RequestLifecycle, str]] = []
+    scheduler._finalize_sequence = lambda seq, reason: finalized.append((seq, reason))  # type: ignore[method-assign]
+    pipeline = PipelineState()
+
+    progressed = GenerationScheduler._launch_prefill_step(scheduler, pipeline)
+
+    assert progressed is True
+    assert list(scheduler.waiting) == [adapter]
+    assert adapter.lifecycle.phase == RequestPhase.WAITING_RESOURCES
+    assert runtime.prepare_calls[0]["prompt_tokens"] == base.prefill_tokens
+    assert finalized == [(base.lifecycle, "length")]
