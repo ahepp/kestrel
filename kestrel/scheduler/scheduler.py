@@ -667,7 +667,7 @@ class GenerationScheduler:
             lifecycle.sequence_state = SequenceState(
                 batch_idx=-1,
                 length=kv_prompt_length,
-                max_length=request.target_length,
+                max_length=self._request_max_length(request),
                 prompt_length=kv_prompt_length,
                 image_length=request.image_length,
                 lora_slot=request.lora_slot,
@@ -801,7 +801,7 @@ class GenerationScheduler:
             state = SequenceState(
                 batch_idx=-1,
                 length=kv_prompt_length,
-                max_length=request.target_length,
+                max_length=self._request_max_length(request),
                 prompt_length=kv_prompt_length,
                 image_length=request.image_length,
                 lora_slot=request.lora_slot,
