@@ -1882,6 +1882,7 @@ class GenerationScheduler:
                     progress = True
                     continue
 
+            prepared: PreparedSequence | None = None
             try:
                 if not candidate.can_reuse:
                     self._ensure_single_image_crops(request)
@@ -1897,7 +1898,11 @@ class GenerationScheduler:
                     image_hash=request.image_hash,
                     adapter_id=request.adapter,
                 )
+                if not prepared.cache_result.can_reuse:
+                    self._ensure_single_image_crops(request)
             except Exception as exc:
+                if prepared is not None:
+                    self.runtime.abort_prepared_sequence(prepared)
                 lifecycle.prefill_started_at = None
                 lifecycle.prefill_completed_at = None
                 if acquired_lora:

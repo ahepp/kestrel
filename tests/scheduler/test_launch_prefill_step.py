@@ -5,6 +5,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 
 import pytest
+import torch
 
 from kestrel.models.moondream.runtime import PrefillClassification, TextToken
 from kestrel.runtime import PreparedSequence, SequenceState
@@ -272,6 +273,53 @@ def test_launch_prefill_step_skips_crop_work_when_image_cache_reused() -> None:
     assert preprocess_calls == []
     assert request.image_crops is None
     assert runtime.prepare_calls[0]["image_crops"] is None
+
+
+def test_launch_prefill_step_materializes_crops_when_planned_hit_becomes_miss() -> None:
+    request = _make_request(max_new_tokens=0)
+    image = object()
+    crops = object()
+    request.image = image
+    request.image_hash = b"image-hash"
+    request.lifecycle.has_image = True
+    request.lifecycle.crops_ready = True
+    request.lifecycle.prefix_cache_hit = True
+    request.lifecycle.lora_slot_ready = True
+    prepared_miss = _make_prepared(batch_idx=0, image_length=4, can_reuse=False)
+    runtime = FakeRuntime(prepare_result=prepared_miss)
+    preprocess_calls: list[object] = []
+    launch_crops: list[list[object | None]] = []
+
+    def preprocess(image_arg: object) -> Future[object]:
+        preprocess_calls.append(image_arg)
+        future: Future[object] = Future()
+        future.set_result(crops)
+        return future
+
+    def launch_prepared_batch(*args, **kwargs):
+        del args
+        launch_crops.append(list(kwargs["image_crops_list"]))
+        return torch.zeros(1, 1)
+
+    runtime.preprocess_image_async = preprocess  # type: ignore[method-assign]
+    runtime.launch_prepared_batch = launch_prepared_batch  # type: ignore[method-assign]
+    scheduler = _make_scheduler(request, runtime)
+    scheduler._select_prefill_batch = lambda capacity_remaining: [
+        _make_candidate(request, can_reuse=True)
+    ]
+    scheduler._acquire_adapter_slot = lambda adapter_id: 0
+    scheduler._compute_stream = None
+    finalized: list[tuple[RequestLifecycle, str]] = []
+    scheduler._finalize_sequence = lambda seq, reason: finalized.append((seq, reason))  # type: ignore[method-assign]
+    pipeline = PipelineState()
+
+    GenerationScheduler._launch_prefill_step(scheduler, pipeline)
+
+    assert runtime.prepare_calls[0]["image_crops"] is None
+    assert preprocess_calls == [image]
+    assert request.image_crops is crops
+    assert launch_crops == [[crops]]
+    assert finalized == [(request.lifecycle, "length")]
 
 
 def test_launch_prefill_step_defers_rows_whose_bound_prefill_mode_changes() -> None:
